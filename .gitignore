@@ -1,0 +1,23 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments
+.env/
+.venv/
+venv/
+ENV/
+
+# Ignore model artifacts
+models/
+*.joblib
+*.pkl
+
+# Ignore outputs (dynamic)
+outputs/
+
+# Ignore raw and processed data
+data/raw/
+data/processed/
+
+

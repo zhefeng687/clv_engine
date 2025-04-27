@@ -1,0 +1,34 @@
+modeling:
+  model_type: xgboost
+  n_estimators: 1000
+  learning_rate: 0.05
+  max_depth: 4
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 1
+  reg_lambda: 1
+  gamma: 1
+  min_child_weight: 5
+  random_state: 42
+  target_column: future_revenue
+
+training:
+  test_size: 0.2
+  early_stopping_rounds: 20
+  eval_metric: rmse
+
+scoring:
+  percentile_bins: [0, 0.01, 0.05, 0.10, 0.20, 1.0]
+  segment_labels: ["Top 1%", "Top 5%", "Top 10%", "Top 20%", "Others"]
+
+clustering:
+  n_clusters: 5
+  random_state: 42
+  clustering_algorithm: kmeans
+
+monitoring:
+  drift_threshold_rmse: 0.20   # retrain if RMSE increases by 20%
+  drift_threshold_r2: 0.15      # retrain if R² drops by 15%
+
+general:
+  timestamp_format: "%Y%m%d_%H%M%S"
