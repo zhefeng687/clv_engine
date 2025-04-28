@@ -27,7 +27,7 @@ Feature Engineering (tenure, recency, revenue_sum, cadence stats)
 (scripts/train_model.py)
 Train CLV Model (XGBoost)
     ↓
-(scripts/predict_and_rank_customers.py)
+(scripts/score_and_rank_customers.py)
 Predict CLV → Rank Customers Individually
     ↓
 (scripts/cluster_customers.py)
