@@ -18,6 +18,36 @@ This CLV Engine system:
 
 ---
 
+## System Overview Diagram
+data/raw/transactions.csv
+    ↓
+(src/feature_engineering.py)
+Feature Engineering (tenure, recency, revenue_sum, cadence stats)
+    ↓
+(scripts/train_model.py)
+Train CLV Model (XGBoost)
+    ↓
+(scripts/predict_and_rank_customers.py)
+Predict CLV → Rank Customers Individually
+    ↓
+(scripts/cluster_customers.py)
+Cluster Customers by Predicted CLV
+    ↓
+(scripts/cluster_rank_customers.py)
+Rank Clusters by Median CLV
+    ↓
+(scripts/monitoring_check.py)
+Monitor Feature Drift and Prediction Drift
+    ↓
+(outputs/)
+    - models/
+    - outputs/clv_ranked_predictions.csv
+    - outputs/clv_clustered_customers.csv
+    - outputs/clv_cluster_rankings.csv
+    - outputs/monitoring/ (drift reports)
+
+---
+
 ## Project Structure
 
 ```
