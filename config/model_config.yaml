@@ -1,21 +1,19 @@
 modeling:
-  model_type: xgboost
-  n_estimators: 1000
-  learning_rate: 0.05
-  max_depth: 4
-  subsample: 0.8
-  colsample_bytree: 0.8
-  reg_alpha: 1
-  reg_lambda: 1
-  gamma: 1
-  min_child_weight: 5
-  random_state: 42
-  target_column: future_revenue
+
 
 training:
-  test_size: 0.2
+  # champion time windows written by the script
+  history_months: 9
+  pred_months: 6
+  test_size: 0.20
   early_stopping_rounds: 20
   eval_metric: rmse
+  cutoff_date: "2021-12-31"   # (keep or edit as needed)
+
+composite_weights:
+  # marketing can tweak these without touching code
+  rmse: 0.5
+  r2:   0.5
 
 scoring:
   percentile_bins: [0, 0.01, 0.05, 0.10, 0.20, 1.0]
