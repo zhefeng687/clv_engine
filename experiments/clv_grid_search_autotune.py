@@ -1,312 +1,202 @@
+#!/usr/bin/env python
+"""
+Grid-search + auto-tune for CLV model
+─────────────────────────────────────
+• sweeps (history_months, pred_months) and XGBoost params
+• uses time-series split to avoid leakage
+• ranks combos by weighted composite score (weights in YAML)
+• writes champion windows + hyper-params back to model_config.yaml
+• saves heat-maps + CSV for analyst review
+"""
+
+from __future__ import annotations
 
 import os
 import sys
 import yaml
-import pandas as pd
+import logging
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, Any
+
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import root_mean_squared_error, r2_score
-from joblib import dump
+from sklearn.model_selection import TimeSeriesSplit
+try:
+    from sklearn.metrics import root_mean_squared_error as rmse
+except ImportError:  # scikit-learn < 1.3
+    from sklearn.metrics import mean_squared_error
+    rmse = lambda y_true, y_pred: mean_squared_error(y_true, y_pred, squared=False)
 
+from sklearn.metrics import r2_score
 from xgboost import XGBRegressor
 
-# Import src modules
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src import data_loader
-from src.feature_engineering import select_training_features
+# ────────────────────────────────────────
+# Paths & configuration
+# ────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH  = PROJECT_ROOT / "config" / "model_config.yaml"
 
-# ==== Config ====
+with open(CONFIG_PATH) as f:
+    cfg: Dict[str, Any] = yaml.safe_load(f)
 
-CONFIG_PATH = "config/model_config.yaml"
+DATA_PATH   = PROJECT_ROOT / "data" / "raw" / "transactions.csv"
+MODEL_DIR   = PROJECT_ROOT / "models"
+OUTPUT_DIR  = PROJECT_ROOT / "outputs"
+OUTPUT_DIR.mkdir(exist_ok=True)
+MODEL_DIR.mkdir(exist_ok=True)
 
-with open(CONFIG_PATH, "r") as file:
-    config = yaml.safe_load(file)
+CSV_OUT      = OUTPUT_DIR / "clv_grid_search_results.csv"
+RMSE_PNG     = OUTPUT_DIR / "rmse_heatmap.png"
+R2_PNG       = OUTPUT_DIR / "r2_heatmap.png"
 
-DATA_PATH = "data/raw/transactions.csv"
-MODEL_DIR = "models/"
-OUTPUT_CSV = "outputs/clv_grid_search_results.csv"
-RMSE_HEATMAP = "outputs/rmse_heatmap.png"
-R2_HEATMAP = "outputs/r2_heatmap.png"
-
-os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs("outputs/", exist_ok=True)
-
-MIN_CUSTOMERS_PERCENT = 0.05
-MIN_CUSTOMERS_STATIC = 100
+# sweep limits
 MAX_HISTORY = 18
 MAX_PREDICT = 12
+MIN_CUSTOMERS_STATIC  = 100
+MIN_CUSTOMERS_PERCENT = 0.05
 
-# ==== Load Raw Data ====
+# logger setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s — %(levelname)s — %(message)s",
+)
+log = logging.getLogger(__name__)
 
-print("Loading raw data...")
+# make src importable
+sys.path.append(str(PROJECT_ROOT))
+
+from src import data_loader
+from src.feature_engineering import make_dataset
+
+# ────────────────────────────────────────
+# 1. Load + basic sanity check
+# ────────────────────────────────────────
+log.info("Loading raw data %s", DATA_PATH)
 df = data_loader.load_raw_data(DATA_PATH)
-df['order_date'] = pd.to_datetime(df['order_date'])
-df = df.sort_values(by=["customer_id", "order_date"])
-end_date = df['order_date'].max()
-total_customers = df["customer_id"].nunique()
+df = df.sort_values(["customer_id", "order_date"])
 
-# ==== Auto-Select Time Windows ====
+end_date       = df["order_date"].max()
+data_start     = df["order_date"].min()
+total_cust     = df["customer_id"].nunique()
+max_possible_m = (end_date.year - data_start.year) * 12 + end_date.month - data_start.month
 
-data_start = df["order_date"].min()
-max_possible_months = (end_date.year - data_start.year) * 12 + end_date.month - data_start.month
+# auto-select candidate windows
+hist_candidates = [m for m in (3, 6, 9, 12, 15, 18)
+                   if m + 3 <= max_possible_m and m <= MAX_HISTORY]
+pred_candidates = [m for m in (3, 6, 9, 12) if m <= MAX_PREDICT]
 
-hist_months_list = [m for m in [3, 6, 9, 12, 15, 18] if m + 3 <= max_possible_months and m <= MAX_HISTORY]
-pred_months_list = [m for m in [3, 6, 9, 12] if m <= MAX_PREDICT]
+log.info("Candidate windows: history %s x prediction %s",
+         hist_candidates, pred_candidates)
 
-results = []
+# ────────────────────────────────────────
+# 2. Grid search
+# ────────────────────────────────────────
+results  : list[dict[str, Any]] = []
+weights = cfg.get("composite_weights", {"rmse": 0.5, "r2": 0.5})
+xgb_base = cfg["modeling"]
 
-print(f"Auto-selected windows: History {hist_months_list} × Prediction {pred_months_list}")
+for h_m in hist_candidates:
+    for p_m in pred_candidates:
 
-# === Utility: Cadence Feature Calculation
-def order_gap_stats(order_dates):
-    if len(order_dates) < 2:
-        return pd.Series([np.nan, np.nan, np.nan])
-    order_dates_sorted = sorted(order_dates)
-    deltas = [(order_dates_sorted[i] - order_dates_sorted[i - 1]).days for i in range(1, len(order_dates_sorted))]
-    return pd.Series([np.mean(deltas), np.std(deltas), np.median(deltas)])
+        cutoff = end_date - relativedelta(months=p_m)
 
-# ==== Grid Search ====
+        # Build dataset (single-source features + label)
+        X_y = make_dataset(df, cutoff=cutoff,
+                           history_months=h_m, pred_months=p_m)
+        if X_y[0].empty:
+            continue
+        X_full, y_full = X_y
 
-results = []
-
-for hist_months in hist_months_list:
-    for pred_months in pred_months_list:
-        
-        cutoff = end_date - relativedelta(months=pred_months)
-        hist_start = cutoff - relativedelta(months=hist_months)
-
-        hist_df = df[(df['order_date'] >= hist_start) & (df['order_date'] <= cutoff)]
-        future_df = df[(df['order_date'] > cutoff) & (df['order_date'] <= cutoff + relativedelta(months=pred_months))]
-
-        if hist_df.empty or future_df.empty:
+        # adaptive min-customers threshold
+        min_required = max(MIN_CUSTOMERS_STATIC,
+                           int(total_cust * MIN_CUSTOMERS_PERCENT))
+        if len(X_full) < min_required:
+            log.warning("Skip h=%s p=%s — only %s customers (<%s)",
+                        h_m, p_m, len(X_full), min_required)
             continue
 
-        # ==== Feature Engineering ====
-        features = (
-            hist_df.groupby("customer_id")
-            .agg(
-                revenue_sum=("revenue", "sum"),
-                revenue_count=("revenue", "count"),
-                avg_order_value=("revenue", "mean"),
-                last_purchase=("order_date", "max"),
-                first_purchase=("order_date", "min"),
-                order_dates=("order_date", list)
+        # time-series CV: average metrics across all folds
+        rmse_folds, r2_folds = [], []
+        for train_idx, val_idx in TimeSeriesSplit(n_splits=4).split(X_full):
+            X_tr, X_val = X_full.iloc[train_idx], X_full.iloc[val_idx]
+            y_tr, y_val = y_full.iloc[train_idx], y_full.iloc[val_idx]
+
+            model = XGBRegressor(**xgb_base)
+            model.fit(
+                X_tr, y_tr,
+                eval_set=[(X_val, y_val)],
+                early_stopping_rounds=cfg["training"]["early_stopping_rounds"],
+                eval_metric=cfg["training"]["eval_metric"],
+                verbose=False,
             )
-            .reset_index()
+
+            preds = model.predict(X_val)
+            rmse_folds.append(rmse(y_val, preds))
+            r2_folds.append(r2_score(y_val, preds))
+
+        res_rmse = float(np.mean(rmse_folds))
+        res_r2   = float(np.mean(r2_folds))
+        log.info("h=%s p=%s  RMSE=%.2f  R²=%.2f",
+                 h_m, p_m, res_rmse, res_r2)
+
+        # store result
+        results.append(
+            dict(hist_months=h_m, pred_months=p_m,
+                 rmse=res_rmse, r2=res_r2,
+                 n_customers=len(X_full))
         )
 
-        # Calculate lifecycle features
-        features["recency_days"] = (cutoff - features["last_purchase"]).dt.days
-        features["tenure_days"] = (cutoff - features["first_purchase"]).dt.days
+# ────────────────────────────────────────
+# 3. Rank + persist results
+# ────────────────────────────────────────
+res_df = pd.DataFrame(results)
+res_df.to_csv(CSV_OUT, index=False)
+log.info("Saved raw grid results → %s", CSV_OUT)
 
-        # Log-transformed revenue_sum
-        features["log_revenue_sum"] = np.log1p(features["revenue_sum"])
+# composite score
+res_df["rmse_norm"] = res_df["rmse"] / res_df["rmse"].max()
+res_df["r2_norm"]   = res_df["r2"]   / res_df["r2"].max()
+res_df["composite"] = ( weights["rmse"] * res_df["rmse_norm"] + weights["r2"] * (1 - res_df["r2_norm"])
+)
 
-        # Binary flags
-        features["is_repeat_buyer"] = features["revenue_count"] > 1
-        features["active_last_30d"] = features["recency_days"] <= 30
+champ = res_df.loc[res_df["composite"].idxmin()]
+h_best, p_best = int(champ["hist_months"]), int(champ["pred_months"])
+log.info("Champion: history=%sM  pred=%sM  RMSE=%.2f  R²=%.2f",
+         h_best, p_best, champ["rmse"], champ["r2"])
 
-        # Cadence features
-        features[['mean_days_between_orders', 'std_days_between_orders', 'median_days_between_orders']] = features['order_dates'].apply(order_gap_stats)
-
-        # Lifecycle Segmentation
-        features['customer_stage'] = pd.cut(
-            features['tenure_days'],
-            bins=[-np.inf, 90, 180, 365, np.inf],
-            labels=["New", "Growing", "Established", "Loyal"]
-        )
-
-        features['status_segment'] = pd.cut(
-            features['recency_days'],
-            bins=[-np.inf, 30, 90, 180, np.inf],
-            labels=["Active", "Lagging", "Dormant", "Churn-risk"]
-        )
-
-        features.drop(columns=["order_dates", "first_purchase", "last_purchase"], inplace=True)
-
-        # ==== Targets ====
-        targets = (
-            future_df.groupby("customer_id")
-            .agg(future_revenue=("revenue", "sum"))
-            .reset_index()
-        )
-
-        data = pd.merge(features, targets, on="customer_id", how="left")
-        data["future_revenue"] = data["future_revenue"].fillna(0)
-
-        # Adaptive minimum customers filter
-        min_customers_required = max(MIN_CUSTOMERS_STATIC, int(total_customers * MIN_CUSTOMERS_PERCENT))
-        if len(data) < min_customers_required:
-            print(f"Skipping hist={hist_months}, pred={pred_months} (only {len(data)} customers)")
-            continue
-
-        X = select_training_features(data)
-        y = data["future_revenue"]
-
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, 
-            test_size=config["training"]["test_size"], 
-            random_state=config["modeling"]["random_state"]
-        )
-
-        model = XGBRegressor(**config["modeling"])
-
-        model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            early_stopping_rounds=config["training"]["early_stopping_rounds"],
-            eval_metric=config["training"]["eval_metric"],
-            verbose=False
-        )
-
-        y_pred = model.predict(X_val)
-        rmse = root_mean_squared_error(y_val, y_pred)
-        r2 = r2_score(y_val, y_pred)
-
-        results.append({
-            "hist_months": hist_months,
-            "pred_months": pred_months,
-            "rmse": rmse,
-            "r2": r2,
-            "n_customers": len(data)
-        })
-
-        print(f"Done hist={hist_months} → pred={pred_months} | RMSE={rmse:.2f} | R²={r2:.2f}")
-
-
-# ==== Save Grid Search Results ====
-
-results_df = pd.DataFrame(results)
-
-# Normalize RMSE and R² for composite scoring
-rmse_max = results_df["rmse"].max()
-r2_max = results_df["r2"].max()
-
-results_df["rmse_norm"] = results_df["rmse"] / rmse_max
-results_df["r2_norm"] = results_df["r2"] / r2_max
-
-# Weighted Sum Composite Score
-results_df["composite"] = 0.5 * results_df["rmse_norm"] + 0.5 * (1 - results_df["r2_norm"])
-
-# Save results
-results_df.to_csv(OUTPUT_CSV, index=False)
-print(f"Grid search results saved to {OUTPUT_CSV}")
-
-# ==== Create Heatmaps ====
-
-print("Generating heatmaps...")
-
-# RMSE Heatmap
+# heat-maps (pivot kwargs explicit for pandas >=2.0)
 plt.figure(figsize=(8, 5))
-pivot_rmse = results_df.pivot("hist_months", "pred_months", "rmse")
-sns.heatmap(pivot_rmse, annot=True, fmt=".2f", cmap="coolwarm")
-plt.title("RMSE Heatmap (History vs Prediction Window)")
-plt.xlabel("Prediction Window (Months)")
-plt.ylabel("History Window (Months)")
-plt.savefig(RMSE_HEATMAP)
-plt.close()
+sns.heatmap(
+    res_df.pivot(index="hist_months", columns="pred_months", values="rmse"),
+    annot=True, fmt=".2f", cmap="coolwarm"
+)
+plt.title("RMSE heat-map")
+plt.savefig(RMSE_PNG); plt.close()
 
-# R² Score Heatmap
 plt.figure(figsize=(8, 5))
-pivot_r2 = results_df.pivot("hist_months", "pred_months", "r2")
-sns.heatmap(pivot_r2, annot=True, fmt=".2f", cmap="YlGnBu")
-plt.title("R² Score Heatmap (History vs Prediction Window)")
-plt.xlabel("Prediction Window (Months)")
-plt.ylabel("History Window (Months)")
-plt.savefig(R2_HEATMAP)
-plt.close()
-
-print(f"Heatmaps saved to:\n- {RMSE_HEATMAP}\n- {R2_HEATMAP}")
-
-# Pick best config based on lowest composite score
-best_config = results_df.sort_values("composite").iloc[0]
-h_best = int(best_config['hist_months'])
-p_best = int(best_config['pred_months'])
-
-print("\nBest Config Found:")
-print(f"History: {h_best} months | Prediction: {p_best} months")
-print(f"RMSE: {best_config['rmse']:.2f} | R²: {best_config['r2']:.2f}")
-
-# ==== Prepare Final Training Data Based on Best Config ====
-
-cutoff = end_date - relativedelta(months=p_best)
-hist_start = cutoff - relativedelta(months=h_best)
-
-hist_df = df[(df['order_date'] >= hist_start) & (df['order_date'] <= cutoff)]
-future_df = df[(df['order_date'] > cutoff) & (df['order_date'] <= cutoff + relativedelta(months=p_best))]
-
-# ==== Final Feature Engineering (Same as earlier, Strategic Plan Features) ====
-
-features = (
-    hist_df.groupby("customer_id")
-    .agg(
-        revenue_sum=("revenue", "sum"),
-        revenue_count=("revenue", "count"),
-        avg_order_value=("revenue", "mean"),
-        last_purchase=("order_date", "max"),
-        first_purchase=("order_date", "min"),
-        order_dates=("order_date", list)
-    )
-    .reset_index()
+sns.heatmap(
+    res_df.pivot(index="hist_months", columns="pred_months", values="r2"),
+    annot=True, fmt=".2f", cmap="YlGnBu"
 )
+plt.title("R² heat-map")
+plt.savefig(R2_PNG); plt.close()
 
-features["recency_days"] = (cutoff - features["last_purchase"]).dt.days
-features["tenure_days"] = (cutoff - features["first_purchase"]).dt.days
+log.info("Saved heat-maps to %s and %s", RMSE_PNG, R2_PNG)
 
-features["log_revenue_sum"] = np.log1p(features["revenue_sum"])
-features["is_repeat_buyer"] = features["revenue_count"] > 1
-features["active_last_30d"] = features["recency_days"] <= 30
+# ────────────────────────────────────────
+# 4. Write champion windows + params back to YAML
+# ────────────────────────────────────────
+cfg["training"]["history_months"] = h_best
+cfg["training"]["pred_months"]    = p_best
+cfg["modeling"] = xgb_base  # already champion params
 
-features[['mean_days_between_orders', 'std_days_between_orders', 'median_days_between_orders']] = features['order_dates'].apply(order_gap_stats)
+with open(CONFIG_PATH, "w") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False)
 
-features['customer_stage'] = pd.cut(
-    features['tenure_days'],
-    bins=[-np.inf, 90, 180, 365, np.inf],
-    labels=["New", "Growing", "Established", "Loyal"]
-)
-
-features['status_segment'] = pd.cut(
-    features['recency_days'],
-    bins=[-np.inf, 30, 90, 180, np.inf],
-    labels=["Active", "Lagging", "Dormant", "Churn-risk"]
-)
-
-features.drop(columns=["order_dates", "first_purchase", "last_purchase"], inplace=True)
-
-# ==== Final Target Construction ====
-
-targets = (
-    future_df.groupby("customer_id")
-    .agg(future_revenue=("revenue", "sum"))
-    .reset_index()
-)
-
-data = pd.merge(features, targets, on="customer_id", how="left")
-data["future_revenue"] = data["future_revenue"].fillna(0)
-
-X_final = data.drop(columns=["customer_id", "future_revenue"])
-y_final = data["future_revenue"]
-
-# ==== Final Model Training ====
-
-final_model = XGBRegressor(**config["modeling"])
-
-final_model.fit(
-    X_final, y_final,
-    eval_metric=config["training"]["eval_metric"],
-    verbose=False
-)
-
-# ==== Save Final Model ====
-
-model_path = f"models/clv_model_hist{h_best}_pred{p_best}.joblib"
-dump(final_model, model_path)
-
-print(f"Final model saved to {model_path}")
+log.info("Updated %s with champion windows + model params", CONFIG_PATH)
