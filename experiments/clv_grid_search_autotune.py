@@ -11,12 +11,10 @@ Grid-search + auto-tune for CLV model
 
 from __future__ import annotations
 
-import os
 import sys
 import yaml
 import logging
 from pathlib import Path
-from datetime import datetime
 from typing import Dict, Any
 
 import numpy as np
@@ -49,7 +47,7 @@ DATA_PATH   = PROJECT_ROOT / "data" / "raw" / "transactions.csv"
 MODEL_DIR   = PROJECT_ROOT / "models"
 OUTPUT_DIR  = PROJECT_ROOT / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
-MODEL_DIR.mkdir(exist_ok=True)
+
 
 CSV_OUT      = OUTPUT_DIR / "clv_grid_search_results.csv"
 RMSE_PNG     = OUTPUT_DIR / "rmse_heatmap.png"
@@ -86,6 +84,7 @@ data_start     = df["order_date"].min()
 total_cust     = df["customer_id"].nunique()
 max_possible_m = (end_date.year - data_start.year) * 12 + end_date.month - data_start.month
 
+
 # auto-select candidate windows
 hist_candidates = [m for m in (3, 6, 9, 12, 15, 18)
                    if m + 3 <= max_possible_m and m <= MAX_HISTORY]
@@ -97,7 +96,7 @@ log.info("Candidate windows: history %s x prediction %s",
 # ────────────────────────────────────────
 # 2. Grid search
 # ────────────────────────────────────────
-results  : list[dict[str, Any]] = []
+results: list[dict[str, Any]] = []
 weights = cfg.get("composite_weights", {"rmse": 0.5, "r2": 0.5})
 xgb_base = cfg["modeling"]
 
@@ -159,12 +158,30 @@ res_df = pd.DataFrame(results)
 res_df.to_csv(CSV_OUT, index=False)
 log.info("Saved raw grid results → %s", CSV_OUT)
 
-# composite score
-res_df["rmse_norm"] = res_df["rmse"] / res_df["rmse"].max()
-res_df["r2_norm"]   = res_df["r2"]   / res_df["r2"].max()
-res_df["composite"] = ( weights["rmse"] * res_df["rmse_norm"] + weights["r2"] * (1 - res_df["r2_norm"])
+# composite score  min–max scaling  (0 = best, 1 = worst)
+rmse_min, rmse_max = res_df["rmse"].agg(["min", "max"])
+r2_min,  r2_max    = res_df["r2"].agg(["min",  "max"])
+
+if rmse_max == rmse_min:            # guard against zero spread
+    res_df["rmse_norm"] = 0
+
+else:
+    res_df["rmse_norm"] = (
+        (res_df["rmse"] - rmse_min) / (rmse_max - rmse_min)
+    )
+
+if r2_max == r2_min:
+    res_df["r2_norm"] = 0
+else:
+    res_df["r2_norm"] = (
+        (res_df["r2"] - r2_min) / (r2_max - r2_min)
+    )
+
+
+res_df["composite"] = (weights["rmse"] * res_df["rmse_norm"] + weights["r2"] * (1 - res_df["r2_norm"])
 )
 
+# smaller composite ⇒ better
 champ = res_df.loc[res_df["composite"].idxmin()]
 h_best, p_best = int(champ["hist_months"]), int(champ["pred_months"])
 log.info("Champion: history=%sM  pred=%sM  RMSE=%.2f  R²=%.2f",
@@ -199,4 +216,4 @@ cfg["modeling"] = xgb_base  # already champion params
 with open(CONFIG_PATH, "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 
-log.info("Updated %s with champion windows + model params", CONFIG_PATH)
+log.info("Updated YAML: %s with best window + model params", CONFIG_PATH)

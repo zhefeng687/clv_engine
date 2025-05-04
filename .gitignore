@@ -1,23 +1,57 @@
-# Ignore Python cache
+# -----------------------------------------------------------------------------
+# 1. Python cache / build artefacts
+# -----------------------------------------------------------------------------
 __pycache__/
-*.pyc
+*.py[cod]
+*.so
+*.egg-info/
+build/
+dist/
 
-# Virtual environments
-.env/
+# -----------------------------------------------------------------------------
+# 2. Virtual-env & IDE metadata
+# -----------------------------------------------------------------------------
 .venv/
-venv/
-ENV/
+.env
+.mypy_cache/
+.pytest_cache/
+.vscode/
+.idea/
 
-# Ignore model artifacts
-models/
-*.joblib
-*.pkl
+# -----------------------------------------------------------------------------
+# 3. Data & pipeline outputs (re-creatable)
+# -----------------------------------------------------------------------------
+data/raw/                      # transactions.csv and other source dumps
+outputs/                       # predictions, clusters, drift reports
+!outputs/.gitkeep
 
-# Ignore outputs (dynamic)
-outputs/
+# -----------------------------------------------------------------------------
+# 4. Heavy model artefacts (kept for 9 mo via S3, not in Git)
+# -----------------------------------------------------------------------------
+models/*.joblib
+models/clv_model_latest*
+models/*.metrics.json          # baseline JSON for monitor (tracked in cards/)
+# keep lightweight lineage
+!models/cards/**
+!models/champion_manifest.csv
 
-# Ignore raw and processed data
-data/raw/
-data/processed/
+# -----------------------------------------------------------------------------
+# 5. Experiment artefacts (but keep the code)
+# -----------------------------------------------------------------------------
+experiments/**/*.ipynb
+experiments/**/benchmark_*.csv
+*.ipynb_checkpoints/
 
+# -----------------------------------------------------------------------------
+# 6. Visualisations & logs
+# -----------------------------------------------------------------------------
+*.png
+*.pdf
+*.log
+*.out
 
+# -----------------------------------------------------------------------------
+# 7. OS cruft
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db

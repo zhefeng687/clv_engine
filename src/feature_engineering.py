@@ -85,8 +85,7 @@ def build_features(
             revenue_count=("revenue", "count"),
             avg_order_value=("revenue", "mean"),
             first_purchase=("order_date", "min"),
-            last_purchase=("order_date", "max"),
-            order_dates=("order_date", list),
+            last_purchase=("order_date", "max")    
         )
         .reset_index()
         .set_index("customer_id")
@@ -101,18 +100,43 @@ def build_features(
     features["is_repeat_buyer"] = features["revenue_count"] > 1
     features["active_last_30d"] = features["recency_days"] <= 30
 
-    # 7 ─ cadence statistics
-    cadence_stats = features["order_dates"].apply(_calculate_cadence_features)
-    cadence_stats.columns = [
-        "mean_days_between_orders",
-        "std_days_between_orders",
-        "median_days_between_orders",
-    ]
-    features = pd.concat([features, cadence_stats], axis=1)
+    # 7 ─ cadence statistics  
+    def _cadence_stats(group: pd.Series) -> pd.Series:
+        """
+        Mean / std / median gaps (days) between consecutive orders.
+        Works on a NumPy array in-place to avoid large Python lists.
+        """
+        dates = group.to_numpy(dtype="datetime64[ns]")
+        if dates.size < 2:
+            return pd.Series(
+                {
+                    "mean_days_between_orders": np.nan,
+                    "std1_days_between_orders": np.nan,
+                    "median_days_between_orders": np.nan,
+                }
+            )
+
+        dates.sort()  # in-place
+        gaps = np.diff(dates).astype("timedelta64[D]").astype(float)
+        return pd.Series(
+            {
+                "mean_days_between_orders": gaps.mean(),
+                "std1_days_between_orders": gaps.std(ddof=1),
+                "median_days_between_orders": np.median(gaps),
+            }
+        )
+
+    cadence_stats = (
+        df_hist.groupby("customer_id")["order_date"]
+        .apply(_cadence_stats)
+        .unstack()  # pivot the 3 keys into columns
+    )
+
+    features = features.join(cadence_stats)
 
     # 8 ─ drop helper columns
     features.drop(
-        columns=["first_purchase", "last_purchase", "order_dates"], inplace=True
+        columns=["first_purchase", "last_purchase"], inplace=True
     )
 
     logger.info(
@@ -120,22 +144,6 @@ def build_features(
         *features.shape,
     )
     return features
-
-# ------------------------------------------------------------------#
-# Helper: cadence stats
-# ------------------------------------------------------------------#
-def _calculate_cadence_features(order_dates: list[pd.Timestamp]) -> pd.Series:
-    """
-    Return mean, std (sample), median of gaps (days) between consecutive orders.
-    """
-    if len(order_dates) < 2:
-        return pd.Series([np.nan, np.nan, np.nan], dtype="float64")
-
-    dates_sorted = np.sort(np.array(order_dates, dtype="datetime64[ns]"))
-    gaps = np.diff(dates_sorted).astype("timedelta64[D]").astype(float)
-    return pd.Series(
-        [gaps.mean(), gaps.std(ddof=1), np.median(gaps)], dtype="float64"
-    )
 
 # ------------------------------------------------------------------#
 # Label builder

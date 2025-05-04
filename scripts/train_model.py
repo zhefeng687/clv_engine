@@ -1,66 +1,82 @@
-# scripts/train_model.py
 
-import os
-import sys
-import yaml
+"""
+Train the production CLV model
+──────────────────────────────
+Reads champion windows + hyper-params from model_config.yaml,
+fits one XGBoost regressor on the full history window, and
+saves:
+
+• models/clv_model_<timestamp>.joblib  (timestamped artefact)
+• models/clv_model_latest.joblib       (symlink / copy)
+• models/clv_model_<timestamp>.metrics.json
+• models/clv_model_latest.metrics.json
+"""
+
+from __future__ import annotations
+
+import sys, yaml, logging
+from pathlib import Path
+from typing import Dict, Any
+
+
 import pandas as pd
-import xgboost as xgb
+from sklearn.metrics import root_mean_squared_error, r2_score
+from xgboost import XGBRegressor
 
-# Import custom modules from src/
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# ─────────────────────── Setup ──────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(PROJECT_ROOT))
+
+CONFIG_PATH  = PROJECT_ROOT / "config" / "model_config.yaml"
+DATA_PATH    = PROJECT_ROOT / "data" / "raw" / "transactions.csv"
+MODEL_DIR    = PROJECT_ROOT / "models"
+MODEL_DIR.mkdir(exist_ok=True)
 
 from src import data_loader
-from src import feature_engineering
-from src import modeling
-from src import utils
-from src.feature_engineering import select_training_features
+from src.feature_engineering import make_dataset, select_training_features
+from src.modeling import save_model
 
-# ==== Load Configuration ====
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s — %(levelname)s — %(message)s",
+)
+log = logging.getLogger(__name__)
 
-CONFIG_PATH = "config/model_config.yaml"
+# ───────────────────────── 1 ▸ load data ────────────────────────────
+with open(CONFIG_PATH) as f:
+    cfg: Dict[str, Any] = yaml.safe_load(f)
 
-with open(CONFIG_PATH, "r") as file:
-    config = yaml.safe_load(file)
+# choose snapshot date
+df_raw = data_loader.load_raw_data(DATA_PATH)
+cutoff = pd.Timestamp(cfg["training"].get("cutoff_date")) \
+         if cfg["training"].get("cutoff_date") else df_raw["order_date"].max()
 
-# ==== Step 1: Load Raw Transaction Data ====
+log.info("Training snapshot cutoff → %s", cutoff.date())
 
-raw_data_path = "data/raw/transactions.csv"
-df_raw = data_loader.load_raw_data(raw_data_path)
+# ───────────────────────── 2 ▸ build dataset ────────────────────────
+X, y = make_dataset(
+    df_raw,
+    cutoff=cutoff,
+    history_months = cfg["training"]["history_months"],
+    pred_months    = cfg["training"]["pred_months"],
+)
+X = select_training_features(X)
 
-# ==== Step 2: Feature Engineering ====
+if X.empty or y is None:
+    raise ValueError("Training data is empty or label is missing")
 
-df_features = feature_engineering.create_features(df_raw)
-df_features = feature_engineering.generate_lifecycle_segments(df_features)
+# ─────────────────────── 3. Train final model ───────────────────────
+model = XGBRegressor(**cfg["modeling"])
+model.fit(X, y)
 
-# Save processed features for scoring later
-processed_data_path = "data/processed/processed_features.csv"
-data_loader.save_processed_data(df_features, processed_data_path)
+y_pred = model.predict(X)
+rmse = root_mean_squared_error(y, y_pred)
+r2   = r2_score(y, y_pred)
+metrics = {"rmse": float(rmse), "r2": float(r2)}
 
-# ==== Step 3: Prepare Training Dataset ====
+log.info("Training RMSE = %.3f | R² = %.3f", rmse, r2)
 
-target_column = config["modeling"]["target_column"]  # e.g., "future_revenue"
+# ─────────────────────── 4. Save artefacts ───────────────────────
+save_model(model, MODEL_DIR, metrics=metrics)
 
-# Features and target
-X_train = select_training_features(df_features)
-y_train = df_features[target_column]
-
-# ==== Step 4: Train the Model ====
-
-model = modeling.train_clv_model(X_train, y_train, config["modeling"])
-
-# ==== Step 5: Save Trained Model and Metadata ====
-
-model_output_path = f"models/clv_model_{utils.timestamp_now()}.joblib"
-modeling.save_model(model, model_output_path)
-
-# Save model training metadata (metrics, config snapshot)
-metrics = modeling.track_model_performance(y_train, model.predict(X_train))
-metadata = {
-    "timestamp": utils.timestamp_now(),
-    "config": config["modeling"],
-    "metrics": metrics
-}
-metadata_output_path = "models/model_metadata.json"
-modeling.save_model_metadata(metadata, metadata_output_path)
-
-print("Model training completed and artifacts saved.")
+log.info("Training complete.")
