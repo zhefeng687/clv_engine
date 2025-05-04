@@ -80,7 +80,9 @@ Override any run with --cutoff YYYY-MM-DD.
 4. Confirm that the new RMSE and R² match the values in the manifest.
 
 ## 5. Lifecycle in one diagram
-                                       ┌───────────────────────────────────────────┐
+```markdown
+```text
+                    ┌───────────────────────────────────────────┐
                     │  Grid-search (manual, quarterly)          │
                     │  experiments/clv_grid_search_autotune.py  │
                     └───────────────┬───────────────────────────┘
