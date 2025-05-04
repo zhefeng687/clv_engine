@@ -127,6 +127,7 @@ Override any run with --cutoff YYYY-MM-DD.
   – consumes the plain prediction file, writes `cluster_id`
 * **Cluster CLV ranking** (`cluster_rank_customers.py`)
   – computes median CLV, CLV-Index, cluster_rank
+```
 
 ## 6. Governance quick-ref
 
