@@ -80,7 +80,7 @@ Override any run with --cutoff YYYY-MM-DD.
 4. Confirm that the new RMSE and R² match the values in the manifest.
 
 ## 5. Lifecycle in one diagram
-                    ┌───────────────────────────────────────────┐
+                                       ┌───────────────────────────────────────────┐
                     │  Grid-search (manual, quarterly)          │
                     │  experiments/clv_grid_search_autotune.py  │
                     └───────────────┬───────────────────────────┘
@@ -96,25 +96,22 @@ Override any run with --cutoff YYYY-MM-DD.
 ║              scheduled scripts/run_full_pipeline.py                         ║
 ║                                                                             ║
 ║ 1. score_and_rank_customers.py                                              ║
-║    ├─ build features → **predict CLV**                                      ║
+║    ├─ build features → predict CLV                                          ║
 ║    │    → outputs/clv_predictions_<DATE>_predXm.csv   (plain)               ║
 ║    └─ add absolute-rank tiers (Top-1 %, Top-5 %, …)                         ║
 ║         → outputs/clv_ranked_predictions_<DATE>_predXm.csv                  ║
 ║                                                                             ║
-║ 2a.  (value lens)                                                           ║
-║    abs-rank columns already present — no further action                     ║
+║ 2a. (value lens) — abs-rank columns already present                         ║
 ║                                                                             ║
-║ 2b.  (behaviour lens)                                                       ║
-║    cluster_customers.py                                                     ║
-║         → outputs/clv_clusters_<DATE>_predXm.csv                            ║
-║    cluster_rank_customers.py                                                ║
-║         → outputs/clv_cluster_ranking_<DATE>_predXm.csv                     ║
+║ 2b. (behaviour lens)                                                        ║
+║     cluster_customers.py            → outputs/clv_clusters_<DATE>_predXm.csv║
+║     cluster_rank_customers.py →outputs/clv_cluster_ranking_<DATE>_predXm.csv║
 ║                                                                             ║
-║ 3. bump YAML run.last_score_cutoff   (+14 d first 12 wks, else +30 d)       ║
+║ 3. bump YAML run.last_score_cutoff  (+14 d first 12 wks, else +30 d)        ║
 ║                                                                             ║
-║ 4. for **each older** prediction file whose window is finished and unlabeled║
-║        • merge_actual_clv.py        → adds actual_clv                       ║
-║        • monitor_drift_simple.py    → 🚨 alert if RMSE / R² drift           ║
+║ 4. for each older prediction file whose window is finished & unlabeled:     ║
+║        merge_actual_clv.py      → adds actual_clv                           ║
+║        monitor_drift_simple.py  → alert if RMSE / R² drift                  ║
 ╚═══════════════════════════════════╤═════════════════════════════════════════╝
                                     │
                                     ▼
