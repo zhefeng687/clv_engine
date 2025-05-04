@@ -54,48 +54,42 @@ today >= <prediction_cutoff> + relativedelta(months=pred_months).
 
 
 # 5  End-to-end diagram
-                       ┌──────────────────────────────────────────┐
-                       │ Grid-search  (manual, quarterly)         │
-                       │  clv_grid_search_autotune.py             │
-                       └──────────────┬───────────────────────────┘
-                                      ▼
-                       ┌──────────────────────────────────────────┐
-                       │ Champion training  (manual)             │
-                       │  train_model.py                          │
-                       │  → model card + baseline metrics         │
-                       └──────────────────────────────────────────┘
-                                      │
-                                      ▼
-╔═════════════════════════════════════╧═════════════════════════════════════════╗
-║              scheduled  run_full_pipeline.py                                  ║
-║                                                                               ║
-║ 1. score_and_rank_customers.py                                                ║
-║    ├─ build features → **predict CLV**                                        ║
-║    │    ↳ writes  clv_predictions_<DATE>_predXm.csv  (plain)                  ║
-║    └─ add absolute-rank tiers (Top-1 %, …)                                    ║
-║        ↳ writes  clv_ranked_predictions_<DATE>_predXm.csv                     ║
-║                                                                               ║
-║ 2a.               (value lens)                                                ║
-║            plain predictions ─┐                                               ║
-║                              ▼                                                ║
-║    abs-rank columns already present (no further action)                       ║
-║                                                                               ║
-║ 2b.               (behaviour lens)                                            ║
-║            plain predictions ─┐                                               ║
-║                              ▼                                                ║
-║    cluster_customers.py                                                        ║
-║        ↳ clv_clusters_<DATE>_predXm.csv                                        ║
-║    cluster_rank_customers.py                                                   ║
-║        ↳ clv_cluster_ranking_<DATE>_predXm.csv                                 ║
-║                                                                               ║
-║ 3. bump YAML last_score_cutoff  (+14 d first 12 wks, else +30 d)              ║
-║                                                                               ║
-║ 4. for **each older** prediction file whose window is finished and unlabeled: ║
-║        • merge_actual_clv.py   → adds actual_clv                              ║
-║        • monitor_drift_simple.py  → 🚨 alert if RMSE/R² drift                 ║
-╚═════════════════════════════════════╤═════════════════════════════════════════╝
-                                      │
-                                      ▼
-                         Human RCA on any drift alert
-                         └─ if stale model → rerun grid-search + train
-
+```markdown
+```text
+                    ┌───────────────────────────────────────────┐
+                    │  Grid-search (manual, quarterly)          │
+                    │  experiments/clv_grid_search_autotune.py  │
+                    └───────────────┬───────────────────────────┘
+                                    ▼
+                    ┌───────────────────────────────────────────┐
+                    │  Champion training (manual)               │
+                    │  scripts/train_model.py                   │
+                    │    → model card JSON + baseline metrics   │
+                    └───────────────────────────────────────────┘
+                                    │
+                                    ▼
+╔═══════════════════════════════════╧═════════════════════════════════════════╗
+║              scheduled scripts/run_full_pipeline.py                         ║
+║                                                                             ║
+║ 1. score_and_rank_customers.py                                              ║
+║    ├─ build features → predict CLV                                          ║
+║    │    → outputs/clv_predictions_<DATE>_predXm.csv   (plain)               ║
+║    └─ add absolute-rank tiers (Top-1 %, Top-5 %, …)                         ║
+║         → outputs/clv_ranked_predictions_<DATE>_predXm.csv                  ║
+║                                                                             ║
+║ 2a. (value lens) — abs-rank columns already present                         ║
+║                                                                             ║
+║ 2b. (behaviour lens)                                                        ║
+║     cluster_customers.py            → outputs/clv_clusters_<DATE>_predXm.csv║
+║     cluster_rank_customers.py →outputs/clv_cluster_ranking_<DATE>_predXm.csv║
+║                                                                             ║
+║ 3. bump YAML run.last_score_cutoff  (+14 d first 12 wks, else +30 d)        ║
+║                                                                             ║
+║ 4. for each older prediction file whose window is finished & unlabeled:     ║
+║        merge_actual_clv.py      → adds actual_clv                           ║
+║        monitor_drift_simple.py  → alert if RMSE / R² drift                  ║
+╚═══════════════════════════════════╤═════════════════════════════════════════╝
+                                    │
+                                    ▼
+                   🚨  Alert triggers human RCA → may rerun grid-search
+```
