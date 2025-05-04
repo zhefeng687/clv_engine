@@ -86,7 +86,7 @@ Override any run with --cutoff YYYY-MM-DD.
                        └──────────────┬───────────────────────────┘
                                       ▼
                        ┌──────────────────────────────────────────┐
-                       │ Champion training  (manual)             │
+                       │ Champion training  (manual)              │
                        │  train_model.py                          │
                        │  → model card + baseline metrics         │
                        └──────────────────────────────────────────┘
@@ -109,10 +109,10 @@ Override any run with --cutoff YYYY-MM-DD.
 ║ 2b.               (behaviour lens)                                            ║
 ║            plain predictions ─┐                                               ║
 ║                              ▼                                                ║
-║    cluster_customers.py                                                        ║
-║        ↳ clv_clusters_<DATE>_predXm.csv                                        ║
-║    cluster_rank_customers.py                                                   ║
-║        ↳ clv_cluster_ranking_<DATE>_predXm.csv                                 ║
+║    cluster_customers.py                                                       ║
+║        ↳ clv_clusters_<DATE>_predXm.csv                                       ║
+║    cluster_rank_customers.py                                                  ║
+║        ↳ clv_cluster_ranking_<DATE>_predXm.csv                                ║
 ║                                                                               ║
 ║ 3. bump YAML last_score_cutoff  (+14 d first 12 wks, else +30 d)              ║
 ║                                                                               ║

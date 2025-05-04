@@ -1,17 +1,19 @@
-modeling:
-
+modeling: {}
 
 training:
-  # champion time windows written by the script
+  # champion windows chosen by clv_grid_search_autotune.py
   history_months: 9
   pred_months: 6
+
+  # hold-out & early-stopping settings for final training
   test_size: 0.20
   early_stopping_rounds: 20
   eval_metric: rmse
-  cutoff_date: "2021-12-31"   # (keep or edit as needed)
+
+  # optional back-test override; otherwise ranking script writes last_score_cutoff
+  cutoff_date: "2021-06-30"
 
 composite_weights:
-  # marketing can tweak these without touching code
   rmse: 0.5
   r2:   0.5
 
@@ -25,8 +27,12 @@ clustering:
   clustering_algorithm: kmeans
 
 monitoring:
-  drift_threshold_rmse: 0.20   # retrain if RMSE increases by 20%
-  drift_threshold_r2: 0.15      # retrain if R² drops by 15%
+  drift_threshold_rmse: 0.20   # retrain if RMSE ↑ 20 %
+  drift_threshold_r2:  0.15    # retrain if R²  ↓ 15 %
+
+# populated automatically by score_and_rank_customers.py
+run:
+  last_score_cutoff: "2021-12-31"        
 
 general:
   timestamp_format: "%Y%m%d_%H%M%S"
