@@ -1,6 +1,6 @@
 modeling: 
 # --- tree & boosting schedule -------------------------------------
-  n_estimators:      500          # total boosting rounds
+  n_estimators:      600          # total boosting rounds
   learning_rate:     0.05         # “eta”
   max_depth:         6            # tree depth (controls interactions)
   min_child_weight:  1            # min sum Hessian in a node
@@ -47,7 +47,7 @@ monitoring:
 
 # populated automatically by score_and_rank_customers.py
 run:
-  last_score_cutoff: "2021-12-31"        
+  last_score_cutoff: "2022-03-30"        
 
 general:
   timestamp_format: "%Y%m%d_%H%M%S"
