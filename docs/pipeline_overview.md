@@ -2,8 +2,7 @@
 
 This document walks through the complete CLV pipeline: who runs which script, in what order, and why. It reflects all code files, including the new auto-driver, model-card persistence, min-max grid-search scaling, and the human-in-the-loop governance model.
 
-
-# 1 Primary flows
+# 1 Primary flows
 
 ## 1-1 Model-build flow (quarterly or on sustained drift alert)
 
@@ -24,12 +23,10 @@ This document walks through the complete CLV pipeline: who runs which script, in
 | **Cut-off bump** | driver logic | Updates `run.last_score_cutoff` in `config/model_config.yaml` (+14 days for first 12 weeks, then +30 days) |
 | **Merge realised revenue + drift monitor** | `merge_actual_clv.py` → `monitor_drift_simple.py` | `outputs/clv_predictions_actual_<DATE>_predXm.csv` + Markdown drift alert |
 
-
 The driver (run_full_pipeline.py) decides whether a given prediction file is ready for merge/monitor by checking:
 today >= <prediction_cutoff> + relativedelta(months=pred_months).
 
-
-# 2  Cadence
+# 2 Cadence
 
 | Phase | Frequency | Driver / Script(s) | Rationale |
 |-------|-----------|--------------------|-----------|
@@ -39,8 +36,7 @@ today >= <prediction_cutoff> + relativedelta(months=pred_months).
 | **Grid-search window tuning** | **Quarterly** or on two consecutive drift alerts | `experiments/clv_grid_search_autotune.py` (manual) | Re-evaluates whether a new history/pred window outperforms the incumbent. |
 | **Champion training** | Immediately after grid-search is approved | `scripts/train_model.py` | Fits the selected window, writes baseline metrics JSON, model card JSON, and updates champion manifest. |
 
-
-# 3  Artefact lifecycle
+# 3 Artefact lifecycle
 
 | Asset | Retention policy | Location | Notes |
 |-------|-----------------|----------|-------|
@@ -52,8 +48,8 @@ today >= <prediction_cutoff> + relativedelta(months=pred_months).
 | **Grid-search result CSVs / PNG heat-maps** | Keep until the next grid-search supersedes them. | `outputs/grid_search/` | Evidence for champion window decision; lightweight (<200 kB). |
 | **Logs & Markdown drift alerts** | Retain per org logging policy (e.g., 1 year in Splunk). | `outputs/` or centralized log store | Drift alerts are also logged at WARN level for SIEM capture. |
 
+# 4 End-to-end diagram
 
-# 5  End-to-end diagram
 ```markdown
 ```text
                     ┌───────────────────────────────────────────┐

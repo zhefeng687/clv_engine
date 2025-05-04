@@ -6,7 +6,7 @@ Predict customer lifetime value, produce two independent segmentation lenses (va
 
 ## 1. Repo structure
 
-## 2. Quick-start commands 
+## 2. Quick-start commands
 
 - **One-time model build (run manually)**
 python scripts/clv_grid_search_autotune.py   # pick best history / pred windows
@@ -17,8 +17,8 @@ python scripts/run_full_pipeline.py          # score → rank → cluster
                                              # driver updates YAML cutoff
 
 - **When a prediction window matures (handled automatically):**
--   the same driver detects it → merges actuals → runs drift monitor
--   and drops a Markdown alert if RMSE or R² drift beyond thresholds
+- the same driver detects it → merges actuals → runs drift monitor
+- and drops a Markdown alert if RMSE or R² drift beyond thresholds
 
 - **Configuration lives in config/model_config.yaml:**
 training:
@@ -32,7 +32,6 @@ monitoring:
 
 Override any run with --cutoff YYYY-MM-DD.
 
-
 ## 3. Operational cadence
 
 | Phase | Frequency | Script(s) | Key artefact |
@@ -41,7 +40,6 @@ Override any run with --cutoff YYYY-MM-DD.
 | **Label merge + drift monitor** | Automatically (driver detects matured window) | `merge_actual_clv.py` → `monitor_drift_simple.py` | Markdown alert saved to `outputs/` |
 | **Grid-search window tuning** | Quarterly **or** on sustained drift alert | `experiments/clv_grid_search_autotune.py` | Results CSV + heat-maps |
 | **Champion training** | After grid-search approval | `scripts/train_model.py` | `.joblib` model, baseline metrics JSON, model-card JSON, updated champion manifest |
-
 
 ## 4. Model governance essentials
 
@@ -66,20 +64,25 @@ Override any run with --cutoff YYYY-MM-DD.
   `outputs/clv_predictions_<DATE>_predXm.csv` (and `_actual_` once revenue attaches).  
   Retained at least until the forward window matures and drift has been evaluated.
 
-**Reproducibility procedure**
+- **Reproducibility procedure**
 
 1. Locate the desired row in `champion_manifest.csv`; note the `code_commit` and `training_cutoff`.
 2. Check out that code version:
+
     ```bash
     git checkout <code_commit>
     ```
+
 3. Re-train with the same cutoff (windows are in the manifest row or model card):
+
     ```bash
     python scripts/train_model.py --cutoff <training_cutoff>
     ```
+
 4. Confirm that the new RMSE and R² match the values in the manifest.
 
 ## 5. Lifecycle in one diagram
+
 ```markdown
 ```text
                     ┌───────────────────────────────────────────┐
@@ -131,13 +134,13 @@ Override any run with --cutoff YYYY-MM-DD.
 
 ## 6. Governance quick-ref
 
-* **Drift alert thresholds**  
+- **Drift alert thresholds**  
   RMSE +20 %  •  R² −15 %  (see config/model_config.yaml)
-* **No automatic retrain.**  
+- **No automatic retrain.**  
   Alerts open a JIRA ticket; DS runs grid-search + training only after review.
-* **Artefact retention**  
+- **Artefact retention**  
   Model card JSONs & champion manifest kept 7 yrs, .joblib purged ≥ 9 mo.
-* **Reproduce a past model**  
+- **Reproduce a past model**  
   1. Find model_id in champion_manifest.csv  
   2. `git checkout <code_commit>` • `python scripts/train_model.py --cutoff <date>`  
   3. Verify RMSE/R² match manifest row.
