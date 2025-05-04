@@ -55,5 +55,9 @@ experiments/**/benchmark_*.csv
 # -----------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
-architecture.md
-strategic_plan.md
+
+# -----------------------------------------------------------------------------
+#8. WIP
+# -------
+docs/architecture.md
+docs/strategic_plan.md
